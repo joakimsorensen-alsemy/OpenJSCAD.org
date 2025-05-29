@@ -83,15 +83,21 @@ const expandDirectional = (options, geometry) => {
       const v1_translated = vec3.add(vec3.create(), v1, directionVector);
       const v2_translated = vec3.add(vec3.create(), v2, directionVector);
 
-      // Create wall quad - order matters for correct normal direction
+      // Create wall quad - try different winding for correct outward normal
       const wallVertices = [
         v1, // original start
-        v2, // original end
-        v2_translated, // translated end
         v1_translated, // translated start
+        v2_translated, // translated end
+        v2, // original end
       ];
 
       const wallPolygon = poly3.create(wallVertices);
+      if (wallCount === 1) {
+        // Debug first wall only
+        console.log("First boundary edge:", v1, "to", v2);
+        console.log("Translated vertices:", v1_translated, v2_translated);
+        console.log("Wall vertices:", wallVertices);
+      }
       allPolygons.push(wallPolygon);
       wallCount++;
     }
