@@ -6,6 +6,7 @@
  * const { expand, offset } = require('@jscad/modeling').expansions
  */
 module.exports = {
-  expand: require('./expand'),
-  offset: require('./offset')
-}
+  expand: require("./expand"),
+  offset: require("./offset"),
+  expandDirectional: require("./expandDirectional"),
+};
