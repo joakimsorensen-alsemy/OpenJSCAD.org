@@ -92,12 +92,6 @@ const expandDirectional = (options, geometry) => {
       ];
 
       const wallPolygon = poly3.create(wallVertices);
-      if (wallCount === 1) {
-        // Debug first wall only
-        console.log("First boundary edge:", v1, "to", v2);
-        console.log("Translated vertices:", v1_translated, v2_translated);
-        console.log("Wall vertices:", wallVertices);
-      }
       allPolygons.push(wallPolygon);
       wallCount++;
     }
@@ -113,11 +107,14 @@ const expandDirectional = (options, geometry) => {
 
 /**
  * Create a consistent edge key regardless of vertex order
+ * Uses tolerance-based comparison for better floating point handling
  */
-const createEdgeKey = (v1, v2) => {
-  const precision = 6;
-  const key1 = `${v1[0].toFixed(precision)},${v1[1].toFixed(precision)},${v1[2].toFixed(precision)}`;
-  const key2 = `${v2[0].toFixed(precision)},${v2[1].toFixed(precision)},${v2[2].toFixed(precision)}`;
+const createEdgeKey = (v1, v2, tolerance = 1e-10) => {
+  // Round to avoid floating point precision issues
+  const round = (num) => Math.round(num / tolerance) * tolerance;
+
+  const key1 = `${round(v1[0])},${round(v1[1])},${round(v1[2])}`;
+  const key2 = `${round(v2[0])},${round(v2[1])},${round(v2[2])}`;
   return key1 < key2 ? `${key1}|${key2}` : `${key2}|${key1}`;
 };
 
