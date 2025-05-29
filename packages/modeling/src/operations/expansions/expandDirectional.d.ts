@@ -7,8 +7,7 @@ export default expandDirectional;
 export interface ExpandDirectionalOptions {
   delta?: number;
   direction?: "x" | "y" | "z";
-  corners?: Corners;
-  segments?: number;
+  tolerance?: number;
 }
 
 type Geom = Path2 | Geom2 | Geom3;
