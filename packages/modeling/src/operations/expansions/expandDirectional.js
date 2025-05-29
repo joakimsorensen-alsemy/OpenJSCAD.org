@@ -1,103 +1,86 @@
+const { EPS, TAU } = require("../../maths/constants");
+
+const mat4 = require("../../maths/mat4");
 const vec3 = require("../../maths/vec3");
+
 const geom3 = require("../../geometries/geom3");
 const poly3 = require("../../geometries/poly3");
 
+const retessellate = require("../modifiers/retessellate");
+const unionGeom3Sub = require("../booleans/unionGeom3Sub");
+const extrudePolygon = require("./extrudePolygon");
+
 /**
  * Expand a 3D mesh in one direction only
+ * Only extrudes faces whose normals point in the specified direction
  * @param {Object} options - Options object
- * @param {Number} options.delta - Distance to expand (can be negative)
+ * @param {Number} options.delta - Distance to expand
  * @param {String} options.direction - Direction to expand ('y', 'x', or 'z')
+ * @param {Number} options.tolerance - How close the normal must be to the direction (default: 0.9)
  * @param {Object} geometry - Input geometry
  */
 const expandDirectional = (options, geometry) => {
   const defaults = {
     delta: 1,
     direction: "y", // 'x', 'y', or 'z'
+    tolerance: 0.9, // dot product threshold (0.9 ≈ 25.8° tolerance)
   };
-  const { delta, direction } = Object.assign({}, defaults, options);
+  const { delta, direction, tolerance } = Object.assign({}, defaults, options);
 
-  // Create direction vector
-  let directionVector;
+  // Create target direction vector
+  let targetDirection;
   switch (direction) {
     case "x":
-      directionVector = [delta, 0, 0];
+      targetDirection = [1, 0, 0];
       break;
     case "y":
-      directionVector = [0, delta, 0];
+      targetDirection = [0, 1, 0];
       break;
     case "z":
-      directionVector = [0, 0, delta];
+      targetDirection = [0, 0, 1];
       break;
     default:
-      directionVector = [0, delta, 0]; // default to y
+      targetDirection = [0, 1, 0]; // default to y
   }
 
+  let result = geom3.create();
   const polygons = geom3.toPolygons(geometry);
-  const allPolygons = [];
 
-  // Add original top surface
-  allPolygons.push(...polygons);
-
-  // Create bottom surface (translated and flipped)
-  const bottomPolygons = polygons.map((polygon) => {
-    const newVertices = polygon.vertices
-      .map((vertex) => vec3.add(vec3.create(), vertex, directionVector))
-      .reverse(); // Reverse for correct outward normal
-    return poly3.create(newVertices);
-  });
-  allPolygons.push(...bottomPolygons);
-
-  // Find all boundary edges and create connecting walls
-  const edgeMap = new Map();
-
-  // Count how many times each edge appears
+  // Loop through polygons and only extrude those facing the target direction
   polygons.forEach((polygon) => {
-    const vertices = polygon.vertices;
-    for (let i = 0; i < vertices.length; i++) {
-      const v1 = vertices[i];
-      const v2 = vertices[(i + 1) % vertices.length];
+    const normal = poly3.plane(polygon);
 
-      const edgeKey = createEdgeKey(v1, v2);
-      if (!edgeMap.has(edgeKey)) {
-        edgeMap.set(edgeKey, { edge: [v1, v2], count: 1 });
-      } else {
-        edgeMap.get(edgeKey).count++;
-      }
+    // Check if this face's normal is close to our target direction
+    const dotProduct = vec3.dot(normal, targetDirection);
+
+    // Also check the opposite direction (negative normal)
+    const dotProductNeg = vec3.dot(
+      normal,
+      vec3.scale(vec3.create(), targetDirection, -1),
+    );
+
+    if (
+      Math.abs(dotProduct) > tolerance ||
+      Math.abs(dotProductNeg) > tolerance
+    ) {
+      // This face is aligned with our target direction - extrude it
+      const extrudevector = vec3.scale(vec3.create(), normal, 2 * delta);
+      const translatedpolygon = poly3.transform(
+        mat4.fromTranslation(
+          mat4.create(),
+          vec3.scale(vec3.create(), extrudevector, -0.5),
+        ),
+        polygon,
+      );
+      const extrudedface = extrudePolygon(extrudevector, translatedpolygon);
+      result = unionGeom3Sub(result, extrudedface);
+    } else {
+      // This face is not aligned - just add it as-is (preserve side faces)
+      result = unionGeom3Sub(result, geom3.create([polygon]));
     }
   });
 
-  // Create walls for boundary edges (edges that appear only once)
-  edgeMap.forEach((edgeInfo) => {
-    if (edgeInfo.count === 1) {
-      // Boundary edge
-      const [v1, v2] = edgeInfo.edge;
-
-      // Create translated vertices
-      const v1_translated = vec3.add(vec3.create(), v1, directionVector);
-      const v2_translated = vec3.add(vec3.create(), v2, directionVector);
-
-      // Create connecting wall with correct winding for outward normal
-      const wallQuad = poly3.create([
-        v1, // original vertex 1
-        v1_translated, // translated vertex 1
-        v2_translated, // translated vertex 2
-        v2, // original vertex 2
-      ]);
-
-      allPolygons.push(wallQuad);
-    }
-  });
-
-  return geom3.create(allPolygons);
-};
-
-/**
- * Create a consistent edge key regardless of vertex order
- */
-const createEdgeKey = (v1, v2) => {
-  const key1 = `${v1[0].toFixed(6)},${v1[1].toFixed(6)},${v1[2].toFixed(6)}`;
-  const key2 = `${v2[0].toFixed(6)},${v2[1].toFixed(6)},${v2[2].toFixed(6)}`;
-  return key1 < key2 ? `${key1}|${key2}` : `${key2}|${key1}`;
+  return retessellate(result);
 };
 
 module.exports = expandDirectional;
