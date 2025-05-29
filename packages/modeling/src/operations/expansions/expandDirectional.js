@@ -53,12 +53,31 @@ const expandDirectional = (options, geometry) => {
     allPolygons.push(translatedPolygon);
   });
 
-  // 3. Add connecting walls for each edge of each polygon
+  // 3. Find boundary edges and create walls only for those
+  const edgeMap = new Map();
+
+  // First pass: count edge occurrences
   polygons.forEach((polygon) => {
     const vertices = polygon.vertices;
     for (let i = 0; i < vertices.length; i++) {
       const v1 = vertices[i];
       const v2 = vertices[(i + 1) % vertices.length];
+
+      const edgeKey = createEdgeKey(v1, v2);
+      if (!edgeMap.has(edgeKey)) {
+        edgeMap.set(edgeKey, { vertices: [v1, v2], count: 1 });
+      } else {
+        edgeMap.get(edgeKey).count++;
+      }
+    }
+  });
+
+  // Second pass: create walls only for boundary edges
+  let wallCount = 0;
+  edgeMap.forEach((edgeInfo) => {
+    if (edgeInfo.count === 1) {
+      // Boundary edge
+      const [v1, v2] = edgeInfo.vertices;
 
       // Create translated vertices
       const v1_translated = vec3.add(vec3.create(), v1, directionVector);
@@ -74,15 +93,26 @@ const expandDirectional = (options, geometry) => {
 
       const wallPolygon = poly3.create(wallVertices);
       allPolygons.push(wallPolygon);
+      wallCount++;
     }
   });
 
   console.log(`Created ${allPolygons.length} polygons total`);
   console.log(
-    `Original: ${polygons.length}, Translated: ${polygons.length}, Walls: ${polygons.reduce((sum, p) => sum + p.vertices.length, 0)}`,
+    `Original: ${polygons.length}, Translated: ${polygons.length}, Boundary walls: ${wallCount}`,
   );
 
   return geom3.create(allPolygons);
+};
+
+/**
+ * Create a consistent edge key regardless of vertex order
+ */
+const createEdgeKey = (v1, v2) => {
+  const precision = 6;
+  const key1 = `${v1[0].toFixed(precision)},${v1[1].toFixed(precision)},${v1[2].toFixed(precision)}`;
+  const key2 = `${v2[0].toFixed(precision)},${v2[1].toFixed(precision)},${v2[2].toFixed(precision)}`;
+  return key1 < key2 ? `${key1}|${key2}` : `${key2}|${key1}`;
 };
 
 module.exports = expandDirectional;
