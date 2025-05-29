@@ -1,14 +1,11 @@
+const mat4 = require("../../maths/mat4");
 const vec3 = require("../../maths/vec3");
-
 const geom3 = require("../../geometries/geom3");
 const poly3 = require("../../geometries/poly3");
 
-const retessellate = require("../modifiers/retessellate");
-const unionGeom3Sub = require("../booleans/unionGeom3Sub");
-
 /**
  * Expand a 3D mesh in one direction only
- * Creates a translated copy and connects all boundary edges
+ * Creates a translated copy and connects edges with walls
  * @param {Object} options - Options object
  * @param {Number} options.delta - Distance to expand
  * @param {String} options.direction - Direction to expand ('y', 'x', or 'z')
@@ -37,78 +34,55 @@ const expandDirectional = (options, geometry) => {
       directionVector = [0, delta, 0]; // default to y
   }
 
-  let result = geom3.create();
   const polygons = geom3.toPolygons(geometry);
+  const allPolygons = [];
 
-  // Add original geometry
-  result = unionGeom3Sub(result, geometry);
-
-  // Create translated geometry with flipped normals
-  const translatedPolygons = polygons.map((polygon) => {
-    const newVertices = polygon.vertices
-      .map((vertex) => vec3.add(vec3.create(), vertex, directionVector))
-      .reverse(); // Reverse for outward normals
-    return poly3.create(newVertices);
+  // 1. Add original polygons (top surface)
+  polygons.forEach((polygon) => {
+    allPolygons.push(polygon);
   });
-  const translatedGeometry = geom3.create(translatedPolygons);
-  result = unionGeom3Sub(result, translatedGeometry);
 
-  // Find ALL edges and create connecting walls for boundary edges
-  const edgeMap = new Map();
+  // 2. Add translated polygons (bottom surface) with flipped normals
+  polygons.forEach((polygon) => {
+    const translatedVertices = polygon.vertices.map((vertex) =>
+      vec3.add(vec3.create(), vertex, directionVector),
+    );
+    // Reverse vertex order for correct outward normal
+    translatedVertices.reverse();
+    const translatedPolygon = poly3.create(translatedVertices);
+    allPolygons.push(translatedPolygon);
+  });
 
-  // Map all edges and count occurrences
+  // 3. Add connecting walls for each edge of each polygon
   polygons.forEach((polygon) => {
     const vertices = polygon.vertices;
     for (let i = 0; i < vertices.length; i++) {
       const v1 = vertices[i];
       const v2 = vertices[(i + 1) % vertices.length];
 
-      const edgeKey = createEdgeKey(v1, v2);
-      if (!edgeMap.has(edgeKey)) {
-        edgeMap.set(edgeKey, {
-          vertices: [v1, v2],
-          count: 1,
-          polygons: [polygon],
-        });
-      } else {
-        const edgeInfo = edgeMap.get(edgeKey);
-        edgeInfo.count++;
-        edgeInfo.polygons.push(polygon);
-      }
-    }
-  });
-
-  // Create walls for ALL boundary edges (edges that appear only once)
-  edgeMap.forEach((edgeInfo) => {
-    if (edgeInfo.count === 1) {
-      // This is a boundary edge
-      const [v1, v2] = edgeInfo.vertices;
-
       // Create translated vertices
       const v1_translated = vec3.add(vec3.create(), v1, directionVector);
       const v2_translated = vec3.add(vec3.create(), v2, directionVector);
 
-      // Create connecting wall with proper winding
-      const wallVertices = [v1, v1_translated, v2_translated, v2];
-      const wallPolygon = poly3.create(wallVertices);
-      const wallGeometry = geom3.create([wallPolygon]);
+      // Create wall quad - order matters for correct normal direction
+      const wallVertices = [
+        v1, // original start
+        v2, // original end
+        v2_translated, // translated end
+        v1_translated, // translated start
+      ];
 
-      result = unionGeom3Sub(result, wallGeometry);
+      const wallPolygon = poly3.create(wallVertices);
+      allPolygons.push(wallPolygon);
     }
   });
 
-  return retessellate(result);
-};
+  console.log(`Created ${allPolygons.length} polygons total`);
+  console.log(
+    `Original: ${polygons.length}, Translated: ${polygons.length}, Walls: ${polygons.reduce((sum, p) => sum + p.vertices.length, 0)}`,
+  );
 
-/**
- * Create a consistent edge key regardless of vertex order
- * Uses higher precision to avoid floating point issues
- */
-const createEdgeKey = (v1, v2) => {
-  const precision = 8; // Higher precision for better accuracy
-  const key1 = `${v1[0].toFixed(precision)},${v1[1].toFixed(precision)},${v1[2].toFixed(precision)}`;
-  const key2 = `${v2[0].toFixed(precision)},${v2[1].toFixed(precision)},${v2[2].toFixed(precision)}`;
-  return key1 < key2 ? `${key1}|${key2}` : `${key2}|${key1}`;
+  return geom3.create(allPolygons);
 };
 
 module.exports = expandDirectional;
