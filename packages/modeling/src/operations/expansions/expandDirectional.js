@@ -66,21 +66,39 @@ const getXZBounds = (geometry) => {
 };
 
 /*
- * Check if a point is within XZ bounds
+ * Create a Y-direction expansion of a polygon face
  */
-const isWithinXZBounds = (point, bounds) => {
-  return (
-    point[0] >= bounds.minX &&
-    point[0] <= bounds.maxX &&
-    point[2] >= bounds.minZ &&
-    point[2] <= bounds.maxZ
-  );
+const extrudePolygonYDirection = (polygon, deltaY) => {
+  const vertices = polygon.vertices;
+  const polygons = [];
+
+  // Create bottom and top faces
+  const bottomVertices = vertices.map((v) => [v[0], v[1] - deltaY, v[2]]);
+  const topVertices = vertices.map((v) => [v[0], v[1] + deltaY, v[2]]);
+
+  // Add original polygon and its Y-displaced copies
+  polygons.push(poly3.create(bottomVertices.slice().reverse())); // Bottom face (reversed for correct normal)
+  polygons.push(poly3.create(topVertices)); // Top face
+
+  // Create side faces connecting bottom to top
+  for (let i = 0; i < vertices.length; i++) {
+    const j = (i + 1) % vertices.length;
+    const sidePolygon = poly3.create([
+      bottomVertices[i],
+      bottomVertices[j],
+      topVertices[j],
+      topVertices[i],
+    ]);
+    polygons.push(sidePolygon);
+  }
+
+  return geom3.create(polygons);
 };
 
 /*
  * Create a rectangular pillar extending in Y direction
  */
-const createYPillar = (center, deltaY, xSize = EPS * 2, zSize = EPS * 2) => {
+const createYPillar = (center, deltaY, xSize = EPS * 10, zSize = EPS * 10) => {
   const halfX = xSize / 2;
   const halfZ = zSize / 2;
 
@@ -116,53 +134,40 @@ const createYPillar = (center, deltaY, xSize = EPS * 2, zSize = EPS * 2) => {
 
 /*
  * Create the expanded shell of the solid in Y direction only:
- * Faces with Y-component normals are extruded only in Y direction
- * Edges get rectangular pillars extending in Y
- * Vertices get small rectangular pillars extending in Y
- * All expansion is constrained to stay within original XZ bounds
+ * All faces are given Y-direction thickness
+ * Rectangular pillars are added at edges and vertices
+ * All expansion stays within original XZ bounds
  */
 const expandDirectional = (options, geometry) => {
   const defaults = {
     delta: 1,
-    expandUp: true, // Expand in +Y direction
-    expandDown: false, // Expand in -Y direction
   };
-  const { delta, expandUp, expandDown } = Object.assign({}, defaults, options);
+  const { delta } = Object.assign({}, defaults, options);
 
-  let result = geom3.create();
+  // Start with the original geometry
+  let result = geom3.clone(geometry);
+
   const edges2planes = new Map();
   const vertices2planes = new Map();
   const xzBounds = getXZBounds(geometry);
 
-  // Calculate actual Y expansion amount
-  const deltaY = delta * ((expandUp ? 1 : 0) + (expandDown ? 1 : 0));
-  const yOffset = expandUp && expandDown ? 0 : expandUp ? delta : -delta;
+  // Expand bounds slightly to include edge cases
+  const expandedBounds = {
+    minX: xzBounds.minX - EPS,
+    maxX: xzBounds.maxX + EPS,
+    minZ: xzBounds.minZ - EPS,
+    maxZ: xzBounds.maxZ + EPS,
+  };
 
   const polygons = geom3.toPolygons(geometry);
 
+  // Process each face - add Y-direction thickness to all faces
   polygons.forEach((polygon) => {
     const plane = poly3.plane(polygon);
-    const normal = plane;
 
-    // Only extrude faces that have significant Y component in their normal
-    if (Math.abs(normal[1]) > 0.1) {
-      // Create extrusion vector only in Y direction
-      const yComponent = normal[1] > 0 ? 1 : -1;
-      let extrudeY = 0;
-
-      if (expandUp && yComponent > 0) extrudeY += delta;
-      if (expandDown && yComponent < 0) extrudeY -= delta;
-
-      if (Math.abs(extrudeY) > EPS) {
-        const extrudevector = [0, extrudeY * 2, 0]; // Double for full thickness
-        const translatedpolygon = poly3.transform(
-          mat4.fromTranslation(mat4.create(), [0, -extrudeY, 0]),
-          polygon,
-        );
-        const extrudedface = extrudePolygon(extrudevector, translatedpolygon);
-        result = unionGeom3Sub(result, extrudedface);
-      }
-    }
+    // Add Y-direction extrusion for every face
+    const extrudedFace = extrudePolygonYDirection(polygon, delta);
+    result = unionGeom3Sub(result, extrudedFace);
 
     // Collect edges and vertices for later processing
     const vertices = polygon.vertices;
@@ -174,55 +179,51 @@ const expandDirectional = (options, geometry) => {
     }
   });
 
-  // Create rectangular pillars for edges instead of cylinders
+  // Add rectangular pillars for edges that stay within XZ bounds
   edges2planes.forEach((item) => {
     const edge = item[0];
-    const planes = item[1];
     const startpoint = edge[0];
     const endpoint = edge[1];
 
-    // Calculate edge midpoint
+    // Calculate edge midpoint and direction
     const midpoint = [
       (startpoint[0] + endpoint[0]) / 2,
       (startpoint[1] + endpoint[1]) / 2,
       (startpoint[2] + endpoint[2]) / 2,
     ];
 
-    // Check if edge midpoint is within XZ bounds
-    if (isWithinXZBounds(midpoint, xzBounds)) {
-      // Create a thin rectangular pillar along the edge
-      const edgeLength = vec3.distance(startpoint, endpoint);
-      const edgeDir = vec3.normalize(
-        vec3.create(),
-        vec3.subtract(vec3.create(), endpoint, startpoint),
-      );
+    // Check if edge is within XZ bounds
+    const withinBounds =
+      midpoint[0] >= expandedBounds.minX &&
+      midpoint[0] <= expandedBounds.maxX &&
+      midpoint[2] >= expandedBounds.minZ &&
+      midpoint[2] <= expandedBounds.maxZ;
 
-      // Determine pillar dimensions based on edge orientation
-      const xSize = Math.abs(edgeDir[0]) > 0.5 ? edgeLength : EPS * 4;
-      const zSize = Math.abs(edgeDir[2]) > 0.5 ? edgeLength : EPS * 4;
+    if (withinBounds) {
+      const edgeVector = vec3.subtract(vec3.create(), endpoint, startpoint);
+      const edgeLength = vec3.length(edgeVector);
 
-      const pillar = createYPillar(
-        [midpoint[0], midpoint[1] + yOffset, midpoint[2]],
-        deltaY / 2,
-        xSize,
-        zSize,
-      );
+      // Create pillar with appropriate size
+      const pillarSize = Math.max(delta * 0.1, EPS * 20);
+      const pillar = createYPillar(midpoint, delta, pillarSize, pillarSize);
       result = unionGeom3Sub(result, pillar);
     }
   });
 
-  // Create small rectangular pillars for vertices instead of spheres
+  // Add small rectangular pillars for vertices that stay within XZ bounds
   vertices2planes.forEach((item) => {
     const vertex = item[0];
-    const planes = item[1];
 
     // Check if vertex is within XZ bounds
-    if (isWithinXZBounds(vertex, xzBounds)) {
-      // Create a small rectangular pillar at the vertex
-      const pillar = createYPillar(
-        [vertex[0], vertex[1] + yOffset, vertex[2]],
-        deltaY / 2,
-      );
+    const withinBounds =
+      vertex[0] >= expandedBounds.minX &&
+      vertex[0] <= expandedBounds.maxX &&
+      vertex[2] >= expandedBounds.minZ &&
+      vertex[2] <= expandedBounds.maxZ;
+
+    if (withinBounds) {
+      const pillarSize = Math.max(delta * 0.05, EPS * 10);
+      const pillar = createYPillar(vertex, delta, pillarSize, pillarSize);
       result = unionGeom3Sub(result, pillar);
     }
   });
